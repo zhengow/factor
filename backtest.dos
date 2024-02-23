@@ -1,0 +1,53 @@
+def get_crypto_return(factor) {
+    cryptos = select distinct instrument from factor
+    times = select min(trade_time) as min, max(trade_time) as max from factor
+    min_time = times['min'][0]
+    max_time = times['max'][0]
+    time_range = [0, 8, 16]
+    crypto_price = select * from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and hour(trade_time) in time_range and instrument in cryptos
+    crypto_return = select trade_time, instrument, move(ratios(open) - 1, -1) as ret from crypto_price context by instrument
+    crypto_return = select * from crypto_return where trade_time >= min_time and trade_time <= max_time order by trade_time, instrument
+    return crypto_return
+}
+
+def group_factor(combine, num) {
+    quantile = select trade_time, instrument, asof(cutPoints(int(value*100000),num), value*100000)+1 as grp, ret from combine context by trade_time csort value having size(distinct(value*100000)) > num
+    quantile = select * from quantile order by trade_time, instrument
+    return quantile
+}
+
+def backtest(factor, num) {
+    crypto_return = get_crypto_return(factor)
+    factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
+    factor_return = lj(crypto_return, factor_shift, `trade_time`instrument) // 每一期的因子值和绝对收益
+
+    grouped = group_factor(factor_return, num) // 组越大，因子值越大
+
+    // 双边换手率
+    // lj 上一期同组，空值数量就是换手数
+    group_shift = select temporalAdd(trade_time, -8, `H) as trade_time, instrument, grp, 0 as flag from grouped
+    group_change = lj(grouped, group_shift, `trade_time`instrument`grp)
+    nullFill!(group_change, 1)
+    turnover = select trade_time, grp, 1.0 * sum(flag) / count(*) as turnover_rate from group_change group by trade_time, grp
+    single_fee = 1.2 / 10000
+    double_fee = 2 * single_fee
+    turnover = select trade_time, grp, cumsum(turnover_rate * double_fee) as cumfee from turnover context by grp csort trade_time
+
+    backtest_result = select trade_time, grp, avg(ret) as ret, count(*) as cnt from grouped group by trade_time, grp
+    backtest_result = select trade_time, grp, cumsum(ret) as cumret, cnt from backtest_result context by grp
+    backtest_result = lj(backtest_result, turnover, `trade_time`grp)
+
+    max_grp = select max(grp) from grouped // 多头组合
+    min_grp = select min(grp) from grouped // 空头组合
+    top_result = select trade_time, cumret as topret, cumfee as topfee from backtest_result where grp in max_grp
+    bottom_result = select trade_time, cumret as bottomret, cumfee as bottomfee from backtest_result where grp in min_grp
+    top_bottom_result = lj(top_result, bottom_result, `trade_time)
+    top_bottom_hedge = select trade_time, -1 as grp, (topret - bottomret) / 2 as cumret, 0 as cnt, (topfee + bottomfee) / 2 as cumfee from top_bottom_result
+
+    backtest_result = unionAll(backtest_result, top_bottom_hedge)
+    backtest_result['af_rev'] = backtest_result['cumret'] - backtest_result['cumfee']
+
+    return backtest_result
+}
+
+backtest(factor, num)
