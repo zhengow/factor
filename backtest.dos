@@ -42,7 +42,9 @@ def backtest(factor, num) {
     top_result = select trade_time, cumret as topret, cumfee as topfee from backtest_result where grp in max_grp
     bottom_result = select trade_time, cumret as bottomret, cumfee as bottomfee from backtest_result where grp in min_grp
     top_bottom_result = lj(top_result, bottom_result, `trade_time)
-    top_bottom_hedge = select trade_time, -1 as grp, (topret - bottomret) / 2 as cumret, 0 as cnt, (topfee + bottomfee) / 2 as cumfee from top_bottom_result
+    // top_bottom_hedge = select trade_time, -1 as grp, (topret - bottomret) / 2 as cumret, 0 as cnt, (topfee + bottomfee) / 2 as cumfee from top_bottom_result
+    // 放大，在图表看的清楚些
+    top_bottom_hedge = select trade_time, -1 as grp, (topret - bottomret) * 2 as cumret, 0 as cnt, (topfee + bottomfee) * 2 as cumfee from top_bottom_result
 
     backtest_result = unionAll(backtest_result, top_bottom_hedge)
     backtest_result['af_rev'] = backtest_result['cumret'] - backtest_result['cumfee']
