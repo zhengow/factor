@@ -1,4 +1,4 @@
-def get_crypto_return(factor) {
+def get_factor_return(factor) {
     cryptos = select distinct instrument from factor
     times = select min(trade_time) as min, max(trade_time) as max from factor
     min_time = times['min'][0]
@@ -7,21 +7,30 @@ def get_crypto_return(factor) {
     crypto_price = select * from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and hour(trade_time) in time_range and instrument in cryptos
     crypto_return = select trade_time, instrument, move(ratios(open) - 1, -1) as ret from crypto_price context by instrument
     crypto_return = select * from crypto_return where trade_time >= min_time and trade_time <= max_time order by trade_time, instrument
-    return crypto_return
+    factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
+    factor_return = lj(crypto_return, factor_shift, `trade_time`instrument) // 每一期的因子值和绝对收益
+    factor_return = select * from factor_return where value is not null
+    // zscore
+    factor_return_debug = select trade_time, instrument, ret, zscore(value) as value from factor_return context by trade_time
+    factor_return_by_zscore = select trade_time, instrument, ret, zscore(value) as value from factor_return context by trade_time
+    return factor_return_by_zscore
 }
 
 def group_factor(combine, num) {
-    quantile = select trade_time, instrument, asof(cutPoints(int(value*100000),num), value*100000)+1 as grp, ret from combine context by trade_time csort value having size(distinct(value*100000)) > num
+    coef = 10000
+    // print(combine)
+    // print(select trade_time, nunique(int(value*coef)) as v from combine group by trade_time order by v)
+    quantile = select trade_time, instrument, asof(cutPoints(int(value*coef),num), value*coef) + 1 as grp, ret from combine context by trade_time csort value having size(distinct(value*coef)) > num
     quantile = select * from quantile order by trade_time, instrument
     return quantile
 }
 
 def backtest(factor, num) {
-    crypto_return = get_crypto_return(factor)
-    factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
-    factor_return = lj(crypto_return, factor_shift, `trade_time`instrument) // 每一期的因子值和绝对收益
+    combine = get_factor_return(factor)
+    // factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
+    // factor_return = lj(crypto_return, select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument, `trade_time`instrument) // 每一期的因子值和绝对收益
 
-    grouped = group_factor(factor_return, num) // 组越大，因子值越大
+    grouped = group_factor(combine, num) // 组越大，因子值越大
 
     // 双边换手率
     // lj 上一期同组，空值数量就是换手数
