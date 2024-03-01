@@ -1,27 +1,44 @@
+def cal_null_ratio(x) {
+    return 1.0 * x[x.isNull()].size() / x.size() 
+}
+
 def get_factor_return(factor) {
-    cryptos = select distinct instrument from factor
     times = select min(trade_time) as min, max(trade_time) as max from factor
-    min_time = times['min'][0]
-    max_time = times['max'][0]
+    min_time = min(factor['trade_time'])
+    max_time = max(factor['trade_time'])
     time_range = [0, 8, 16]
-    crypto_price = select * from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and hour(trade_time) in time_range and instrument in cryptos
+    crypto_price = select * from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and hour(trade_time) in time_range
     crypto_return = select trade_time, instrument, move(ratios(open) - 1, -1) as ret from crypto_price context by instrument
-    crypto_return = select * from crypto_return where trade_time >= min_time and trade_time <= max_time order by trade_time, instrument
+    crypto_return = select * from crypto_return where trade_time > min_time and trade_time <= max_time order by trade_time, instrument
     factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
     factor_return = lj(crypto_return, factor_shift, `trade_time`instrument) // 每一期的因子值和绝对收益
+    null_ratio = select trade_time, cal_null_ratio(value) as ratio from factor_return group by trade_time
+    // null_ratio[null_ratio['ratio'] > 0.1]
+    if (null_ratio[null_ratio['ratio'] > 0.1].size() > 0) {
+        throw "factor null ratio > 10%, check!", null_ratio[null_ratio['ratio'] > 0.1]
+    }
+
     factor_return = select * from factor_return where value is not null
-    // zscore
-    factor_return_debug = select trade_time, instrument, ret, zscore(value) as value from factor_return context by trade_time
-    factor_return_by_zscore = select trade_time, instrument, ret, zscore(value) as value from factor_return context by trade_time
-    return factor_return_by_zscore
+    return factor_return
 }
 
 def group_factor(combine, num) {
     coef = 10000
     // print(combine)
     // print(select trade_time, nunique(int(value*coef)) as v from combine group by trade_time order by v)
-    quantile = select trade_time, instrument, asof(cutPoints(int(value*coef),num), value*coef) + 1 as grp, ret from combine context by trade_time csort value having size(distinct(value*coef)) > num
+    quantile = select trade_time, instrument, rank(value, tiesMethod='min', groupNum=num) + 1 as grp, ret, value from combine context by trade_time csort value having size(distinct(value*coef)) > num
     quantile = select * from quantile order by trade_time, instrument
+
+    // 校验分组数量
+    quantile_avg = select trade_time, 1.0 * count(*) / num as expect_num from combine group by trade_time
+    quantile_num = select trade_time, grp, count(*) from quantile group by trade_time, grp
+    quantile_verify = lj(quantile_num, quantile_avg, `trade_time)
+    quantile_ratio = select trade_time, grp, abs(count - expect_num) / expect_num as ratio from quantile_verify
+    quantile_ratio = select * from quantile_ratio where ratio > 0.2
+    if (sum(quantile_ratio['ratio'] > 0.2) > 0) {
+        throw "group ratio > 20%, check!", quantile_ratio
+    }
+
     return quantile
 }
 

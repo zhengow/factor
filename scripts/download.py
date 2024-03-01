@@ -32,7 +32,6 @@ class Kline(Enum):
 class Downloader:
     def __init__(self, kline: Kline) -> None:
         um_futures_client = UMFutures()
-        self.um_futures_client = um_futures_client
         instruments = um_futures_client.exchange_info()['symbols']
         instruments = [i['pair'] for i in instruments if i['contractType'] == 'PERPETUAL' and i['pair'].endswith('USDT')]
         self.instruments = instruments
@@ -49,8 +48,10 @@ class Downloader:
         sess.close()
         if pd.isna(df['t'].iloc[0]):
             start_time = int(time.mktime(time.strptime('2018-01-01 00:00:00', '%Y-%m-%d %H:%M:%S'))) * 1000
+            um_futures_client = UMFutures()
+            data = um_futures_client.klines(instrument, self.kline, startTime=start_time, limit=1)
+            start_time = data[0][0] + self.second * 1000
         else:
-            print(df)
             start_time = int(df.iloc[0]['t'].tz_localize('Asia/Shanghai').timestamp()) * 1000
         return start_time
     
@@ -59,11 +60,19 @@ class Downloader:
         start_time = self._get_start_time(instrument)
         # 每小时的时间戳
         # interval = 3600 * 1000
+        um_futures_client = UMFutures()
         tqdm_num = int(time.time()) * 1000 - start_time
         with tqdm(total=int(tqdm_num)) as pbar:
             while start_time <= int(time.time()) * 1000:
-                um_futures_client = self.um_futures_client
-                data = um_futures_client.klines(instrument, self.kline, startTime=start_time, limit=self.num)
+                try:
+                    data = um_futures_client.klines(instrument, self.kline, startTime=start_time, limit=self.num)
+                except:
+                    print("error, sleep")
+                    time.sleep(10)
+                    data = um_futures_client.klines(instrument, self.kline, startTime=start_time, limit=self.num)
+                # if int(data['limit_usage']['x-mbx-used-weight-1m']) > 1000:
+                #     time.sleep(60)
+                # data = data['data']
                 df = pd.DataFrame(data, columns=['trade_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'amount', 'trade_num', 'acitve_volume', 'active_amount', 'drop'])
                 df['instrument'] = instrument
                 df['exchange'] = 'BINANCE'
@@ -90,6 +99,7 @@ class Downloader:
                 df = df[['instrument', 'exchange', 'trade_time', 'open', 'close', 'high', 'low', 'volume', 'amount', 'trade_num', 'acitve_volume', 'active_amount']]
                 sess.run(f"append!{{loadTable('dfs://crypto_db', `{self.table})}}", df)
                 pbar.update(interval)
+                # time.sleep(0.5)
             pbar.update(1)
         sess.close()
         
