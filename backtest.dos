@@ -3,13 +3,12 @@ def cal_null_ratio(x) {
 }
 
 def get_factor_return(factor) {
-    times = select min(trade_time) as min, max(trade_time) as max from factor
     min_time = min(factor['trade_time'])
     max_time = max(factor['trade_time'])
     time_range = [0, 8, 16]
     crypto_price = select * from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and hour(trade_time) in time_range
     crypto_return = select trade_time, instrument, move(ratios(open) - 1, -1) as ret from crypto_price context by instrument
-    crypto_return = select * from crypto_return where trade_time > min_time and trade_time <= max_time order by trade_time, instrument
+    crypto_return = select * from crypto_return where trade_time > min_time and trade_time <= max_time and ret is not null order by trade_time, instrument
     factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
     factor_return = lj(crypto_return, factor_shift, `trade_time`instrument) // 每一期的因子值和绝对收益
     null_ratio = select trade_time, cal_null_ratio(value) as ratio from factor_return group by trade_time
