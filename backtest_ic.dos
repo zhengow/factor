@@ -1,0 +1,51 @@
+def cal_null_ratio(x) {
+    return 1.0 * x[x.isNull()].size() / x.size() 
+}
+
+def get_coin_listinfo() {
+    return select instrument, min(trade_time) as list_time from loadTable("dfs://crypto_db", "k_hour") group by instrument
+}
+
+def get_factor_return(factor) {
+    min_time = min(factor['trade_time'])
+    max_time = max(factor['trade_time'])
+    max_time = min(max_time, 2024.02.01 00:00:00.000)
+    vwap = select trade_time, instrument, amount / volume as vwap from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and trade_time >= 2020.02.01
+    listinfo = get_coin_listinfo()
+    vwap = lj(vwap, listinfo, `instrument)
+    // 剔除上市未满7天
+    vwap = select trade_time, instrument, vwap from vwap where trade_time >= temporalAdd(list_time, 7, `d)
+    crypto_return = select trade_time, instrument, ffill(move(log(ratios(vwap)), -2)) as ret from vwap context by instrument
+    // 每小时的未来vwap return
+    crypto_return = select * from crypto_return where trade_time > min_time and trade_time <= max_time and ret is not null order by trade_time, instrument
+    crypto_return = select trade_time, instrument, ret - mean(ret) as ret from crypto_return context by trade_time
+    
+    // factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
+    factor_with_return = lj(crypto_return, factor, `trade_time`instrument) // 每一期的因子值和绝对收益
+    null_ratio = select trade_time, cal_null_ratio(factor_value) as ratio from factor_with_return group by trade_time
+    if (null_ratio[null_ratio['ratio'] > 0.3].size() > 0) {
+        throw "factor null ratio > 30%, check!", null_ratio[null_ratio['ratio'] > 0.3]
+    }
+
+    factor_with_return = select * from factor_with_return where factor_value is not null
+    return factor_with_return
+}
+
+
+def backtest(factor) {
+    combine = get_factor_return(factor)
+    ic = select trade_time, corr(rank(ret), rank(factor_value)) as sic, corr(ret, factor_value) as pic from combine group by trade_time
+    for (i in 1..5) {
+        tmp = select trade_time, instrument, msum(move(ret, -i), i+1) as ret, factor_value from combine context by instrument csort trade_time
+        tmp = select * from tmp where ret is not null
+        sic_col = 'sic_' + string(i)
+        pic_col = 'pic_' + string(i)
+        tmp_ic = select trade_time, corr(rank(ret), rank(factor_value)) as sic, corr(ret, factor_value) as pic from tmp group by trade_time
+        tmp_ic.rename!([`trade_time, sic_col, pic_col])
+        ic = lj(ic, tmp_ic, `trade_time)
+    }
+    return ic
+}
+
+// 2020.02.01开始, 这个时候才有10个币
+backtest(factor)

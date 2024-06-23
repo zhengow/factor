@@ -1,0 +1,103 @@
+def cal_null_ratio(x) {
+    return 1.0 * x[x.isNull()].size() / x.size() 
+}
+
+def get_coin_listinfo() {
+    return select instrument, min(trade_time) as list_time from loadTable("dfs://crypto_db", "k_hour") group by instrument
+}
+
+def get_factor_return(factor) {
+    min_time = min(factor['trade_time'])
+    max_time = max(factor['trade_time'])
+    // max_time = min(max_time, 2024.02.01 00:00:00.000)
+    '''
+    BTCUSDT 100.0
+    ETHUSDT 20.0
+    BCHUSDT 20.0
+    LTCUSDT 20.0
+    ETCUSDT 20.0
+    LINKUSDT 20.0
+    '''
+    // tmp_coins = ['BTCUST', 'ETHUSDT', 'BCHUSDT', 'LTCUSDT', 'ETCUSDT', 'LINKUSDT']
+    tmp_coins = ['']
+    vwap = select trade_time, instrument, amount / volume as vwap from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and trade_time >= 2020.02.01 and instrument not in tmp_coins
+    listinfo = get_coin_listinfo()
+    vwap = lj(vwap, listinfo, `instrument)
+    // 剔除上市未满7天
+    vwap = select trade_time, instrument, vwap from vwap where trade_time >= temporalAdd(list_time, 7, `d)
+    crypto_return = select trade_time, instrument, ffill(move(log(ratios(vwap)), -2)) as ret from vwap context by instrument
+    // 每小时的未来vwap return
+
+    crypto_return = select * from crypto_return where trade_time > min_time and trade_time <= max_time and ret is not null order by trade_time, instrument
+    crypto_return = select trade_time, instrument, ret - mean(ret) as ret from crypto_return context by trade_time
+    
+    // factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
+    factor_with_return = lj(crypto_return, factor, `trade_time`instrument) // 每一期的因子值和绝对收益
+    null_ratio = select trade_time, cal_null_ratio(factor_value) as ratio from factor_with_return group by trade_time
+    if (null_ratio[null_ratio['ratio'] > 0.3].size() > 0) {
+        throw "factor null ratio > 30%, check!", null_ratio[null_ratio['ratio'] > 0.3]
+    }
+
+    factor_with_return = select * from factor_with_return where factor_value is not null
+    return factor_with_return
+}
+
+def group_factor(combine, num) {
+    coef = 10000
+    quantile = select trade_time, instrument, asof(cutPoints(int(factor_value*coef),num), factor_value*coef) + 1 as grp, ret from combine context by trade_time csort factor_value having size(distinct(factor_value*coef)) > num
+    quantile = select * from quantile order by trade_time, instrument
+    return quantile
+}
+
+def get_adjust_combine(combine, adjust_hour) {
+    min_time = min(combine['trade_time'])
+    max_time = max(combine['trade_time'])
+    max_flag = (max_time - min_time) / (1000 * 60 * 60 * adjust_hour)
+    timevector = min_time + (1000 * 60 * 60 * adjust_hour)*(0..max_flag)
+    move_shift = adjust_hour - 1
+    if (adjust_hour > 1) {
+        res = select trade_time, instrument, msum(move(ret, -move_shift), move_shift+1) as ret, factor_value from combine context by instrument csort trade_time
+    } else {
+        res = combine
+    }
+    res = select * from res where trade_time in timevector and ret is not null order by trade_time, instrument
+    return res
+}
+
+def backtest(factor, num, adjust_hour) {
+    combine = get_factor_return(factor)
+    adjust_combine = get_adjust_combine(combine, adjust_hour)
+    grouped = group_factor(adjust_combine, num) // 组越大，因子值越大
+    
+    group_shift = select temporalAdd(trade_time, -adjust_hour, `H) as trade_time, instrument, grp, 0 as flag from grouped
+    group_change = lj(grouped, group_shift, `trade_time`instrument`grp)
+    nullFill!(group_change, 1)
+    turnover = select trade_time, grp, 1.0 * sum(flag) / count(*) as turnover_rate from group_change group by trade_time, grp
+    
+    single_fee = 2.0 / 10000
+    double_fee = 2 * single_fee
+    turnover = select trade_time, grp, cumsum(turnover_rate * double_fee) as cumfee from turnover context by grp csort trade_time
+
+    backtest_result = select trade_time, grp, avg(ret) as ret, count(*) as cnt from grouped group by trade_time, grp
+    backtest_result = select trade_time, grp, cumsum(ret) as cumret, cnt from backtest_result context by grp
+    backtest_result = lj(backtest_result, turnover, `trade_time`grp)
+
+    max_grp = select max(grp) from grouped // 多头组合
+    min_grp = select min(grp) from grouped // 空头组合
+    top_result = select trade_time, cumret as topret, cumfee as topfee from backtest_result where grp in max_grp
+    bottom_result = select trade_time, cumret as bottomret, cumfee as bottomfee from backtest_result where grp in min_grp
+    top_bottom_result = lj(top_result, bottom_result, `trade_time)
+    // top_bottom_hedge = select trade_time, -1 as grp, (topret - bottomret) / 2 as cumret, 0 as cnt, (topfee + bottomfee) / 2 as cumfee from top_bottom_result
+    // 放大，在图表看的清楚些
+    top_bottom_hedge = select trade_time, -1 as grp, (topret - bottomret) as cumret, 0 as cnt, (topfee + bottomfee) as cumfee from top_bottom_result
+
+    backtest_result = unionAll(backtest_result, top_bottom_hedge)
+    backtest_result['af_rev'] = backtest_result['cumret'] - backtest_result['cumfee']
+
+    return backtest_result
+}
+
+// 2020.02.01开始, 这个时候才有10个币
+backtest(factor, num, adjust_hour)
+
+// select * from grouped where trade_time > 2024.05.01 order by trade_time, grp
