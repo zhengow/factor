@@ -33,7 +33,8 @@ class Downloader:
     def __init__(self, kline: Kline) -> None:
         um_futures_client = UMFutures()
         instruments = um_futures_client.exchange_info()['symbols']
-        instruments = [i['pair'] for i in instruments if i['contractType'] == 'PERPETUAL' and i['pair'].endswith('USDT')]
+        instruments = [i['pair'] for i in instruments if i['contractType'] == 'PERPETUAL' and i['pair'].endswith('USDT') and i['status'] == 'TRADING']
+        instruments.remove('USDCUSDT')
         self.instruments = instruments
         self.kline = kline
         self.table = 'k_hour' if self.kline == Kline.Hour.value else 'k_minute'
@@ -111,5 +112,5 @@ class Downloader:
 
 
 if __name__ == "__main__":
-    d = Downloader(Kline.Minute.value)
-    d.download()        
+    d = Downloader(Kline.Hour.value)
+    # d.download()

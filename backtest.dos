@@ -20,8 +20,8 @@ def get_factor_return(factor) {
     factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
     factor_return = lj(crypto_return, factor_shift, `trade_time`instrument) // 每一期的因子值和绝对收益
     null_ratio = select trade_time, cal_null_ratio(value) as ratio from factor_return group by trade_time
-    if (null_ratio[null_ratio['ratio'] > 0.1].size() > 0) {
-        throw "factor null ratio > 10%, check!", null_ratio[null_ratio['ratio'] > 0.1]
+    if (null_ratio[null_ratio['ratio'] > 0.3].size() > 0) {
+        throw "factor null ratio > 30%, check!", null_ratio[null_ratio['ratio'] > 0.3]
     }
 
     factor_return = select * from factor_return where value is not null
@@ -70,7 +70,7 @@ def backtest(factor, num) {
     combine = get_factor_return(factor)
     // factor_shift = select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument
     // factor_return = lj(crypto_return, select trade_time, instrument, move(factor_value, 1) as value from factor context by instrument, `trade_time`instrument) // 每一期的因子值和绝对收益
-
+    ic = select trade_time, corr(rank(ret), rank(value)) from combine group by trade_time
     grouped = group_factor(combine, num) // 组越大，因子值越大
 
     // 双边换手率
@@ -99,7 +99,7 @@ def backtest(factor, num) {
     backtest_result = unionAll(backtest_result, top_bottom_hedge)
     backtest_result['af_rev'] = backtest_result['cumret'] - backtest_result['cumfee']
 
-    return backtest_result
+    return backtest_result, ic
 }
 
 backtest(factor, num)

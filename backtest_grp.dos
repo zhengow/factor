@@ -20,7 +20,8 @@ def get_factor_return(factor) {
     '''
     // tmp_coins = ['BTCUST', 'ETHUSDT', 'BCHUSDT', 'LTCUSDT', 'ETCUSDT', 'LINKUSDT']
     tmp_coins = ['']
-    vwap = select trade_time, instrument, amount / volume as vwap from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and trade_time >= 2020.02.01 and instrument not in tmp_coins
+    vwap = select trade_time, instrument, amount / volume as vwap from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and trade_time >= 2020.02.01
+
     listinfo = get_coin_listinfo()
     vwap = lj(vwap, listinfo, `instrument)
     // 剔除上市未满7天
