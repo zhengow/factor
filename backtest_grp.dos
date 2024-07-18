@@ -19,7 +19,39 @@ def get_factor_return(factor) {
     LINKUSDT 20.0
     '''
     // tmp_coins = ['BTCUST', 'ETHUSDT', 'BCHUSDT', 'LTCUSDT', 'ETCUSDT', 'LINKUSDT']
-    tmp_coins = ['']
+    tmp_coins = [
+        'BTCUSDT',
+        'ETHUSDT',
+        'BCHUSDT',
+        'LTCUSDT',
+        'ETCUSDT',
+        'LINKUSDT',
+        'WAVESUSDT',
+        'SOLUSDT',
+        'AVAXUSDT',
+        'AAVEUSDT',
+        'OCEANUSDT',
+        'CVCUSDT',
+        'CTKUSDT',
+        'BTCSTUSDT',
+        'SCUSDT',
+        'DGBUSDT',
+        'RAYUSDT',
+        'FTTUSDT',
+        'GALUSDT',
+        'CVXUSDT',
+        'AGIXUSDT',
+        'IDEXUSDT',
+        'RADUSDT',
+        'MDTUSDT',
+        'GLMRUSDT',
+        'STRAXUSDT',
+        'STPTUSDT',
+        'SLPUSDT',
+        'SNTUSDT',
+        'BTCUSDC',
+        'ETHUSDC',
+    ]
     vwap = select trade_time, instrument, amount / volume as vwap from loadTable("dfs://crypto_db", "k_hour") where trade_time >= min_time and trade_time <= temporalAdd(max_time, 2, `d) and trade_time >= 2020.02.01
 
     listinfo = get_coin_listinfo()
@@ -39,13 +71,22 @@ def get_factor_return(factor) {
         throw "factor null ratio > 30%, check!", null_ratio[null_ratio['ratio'] > 0.3]
     }
 
-    factor_with_return = select * from factor_with_return where factor_value is not null
+    factor_with_return = select * from factor_with_return where factor_value is not null and instrument not in tmp_coins
     return factor_with_return
 }
 
+def grp(val, num) {
+    pos = array(val, num, num)
+    min_ratio = 1.0 / num
+    for (i in 1..num) {
+        q = min_ratio * i
+        pos[i-1] = double(quantile(val, q)) * (1 + 1e-3);
+    }   
+    return asof(pos, val) + 2
+}
+
 def group_factor(combine, num) {
-    coef = 10000
-    quantile = select trade_time, instrument, asof(cutPoints(int(factor_value*coef),num), factor_value*coef) + 1 as grp, ret from combine context by trade_time csort factor_value having size(distinct(factor_value*coef)) > num
+    quantile = select trade_time, instrument, grp(factor_value, num) as grp, ret from combine context by trade_time csort factor_value
     quantile = select * from quantile order by trade_time, instrument
     return quantile
 }
@@ -74,8 +115,9 @@ def backtest(factor, num, adjust_hour) {
     group_change = lj(grouped, group_shift, `trade_time`instrument`grp)
     nullFill!(group_change, 1)
     turnover = select trade_time, grp, 1.0 * sum(flag) / count(*) as turnover_rate from group_change group by trade_time, grp
-    
+
     single_fee = 2.0 / 10000
+    // single_fee = 0.0
     double_fee = 2 * single_fee
     turnover = select trade_time, grp, cumsum(turnover_rate * double_fee) as cumfee from turnover context by grp csort trade_time
 
