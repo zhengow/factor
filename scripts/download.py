@@ -75,6 +75,7 @@ class Downloader:
                 #     time.sleep(60)
                 # data = data['data']
                 df = pd.DataFrame(data, columns=['trade_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'amount', 'trade_num', 'acitve_volume', 'active_amount', 'drop'])
+                df = df[df['close_time'] < int(time.time()) * 1000]
                 df['instrument'] = instrument
                 df['exchange'] = 'BINANCE'
                 df = df.drop(columns=['close_time', 'drop'])
@@ -99,6 +100,7 @@ class Downloader:
                 df['trade_time'] = df['trade_time'] + pd.Timedelta(hours=8)
                 df = df[['instrument', 'exchange', 'trade_time', 'open', 'close', 'high', 'low', 'volume', 'amount', 'trade_num', 'acitve_volume', 'active_amount']]
                 sess.run(f"append!{{loadTable('dfs://crypto_db', `{self.table})}}", df)
+                print(instrument, df)
                 pbar.update(interval)
                 # time.sleep(0.5)
             pbar.update(1)
@@ -113,4 +115,4 @@ class Downloader:
 
 if __name__ == "__main__":
     d = Downloader(Kline.Hour.value)
-    # d.download()
+    d.download()
